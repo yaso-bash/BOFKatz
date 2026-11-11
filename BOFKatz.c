@@ -471,12 +471,16 @@ void go(char* args, int len) {
         MSVCRT$strcpy(peArgs, "coffee exit");
         BeaconPrintf(CALLBACK_OUTPUT, "Using default arguments: %s", peArgs);
     } else {
-        MSVCRT$strcpy(peArgs, currentArg);
+        if (MSVCRT$strchr(currentArg, ' ') != NULL) {
+            MSVCRT$strcpy(peArgs, "\"");
+            MSVCRT$strcat(peArgs, currentArg);
+            MSVCRT$strcat(peArgs, "\"");
+        } else {
+            MSVCRT$strcpy(peArgs, currentArg);
+        }
         argCount++;
- 
-        // Aditional args
+
         while ((currentArg = BeaconDataExtract(&parser, NULL)) != NULL) {
-            // Parse quotes
             if (MSVCRT$strchr(currentArg, ' ') != NULL) {
                 MSVCRT$strcat(peArgs, " \"");
                 MSVCRT$strcat(peArgs, currentArg);
