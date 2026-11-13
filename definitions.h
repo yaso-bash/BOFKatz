@@ -71,6 +71,8 @@ DECLSPEC_IMPORT BOOL WINAPI KERNEL32$FreeLibrary(HMODULE hLibModule);
 DECLSPEC_IMPORT BOOL WINAPI KERNEL32$ReadProcessMemory(HANDLE hProcess, LPCVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize, SIZE_T *lpNumberOfBytesRead);
 DECLSPEC_IMPORT BOOL WINAPI KERNEL32$VirtualFreeEx(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD dwFreeType);
 DECLSPEC_IMPORT NTSTATUS WINAPI NTDLL$NtUnmapViewOfSection(HANDLE ProcessHandle, PVOID BaseAddress);
+DECLSPEC_IMPORT BOOL WINAPI KERNEL32$GetExitCodeThread(HANDLE hThread, LPDWORD lpExitCode);
+DECLSPEC_IMPORT BOOL WINAPI KERNEL32$FlushInstructionCache(HANDLE hProcess, LPCVOID lpBaseAddress, SIZE_T dwSize);
 
 DECLSPEC_IMPORT void __cdecl MSVCRT$free(void* ptr);
 DECLSPEC_IMPORT int __cdecl MSVCRT$_stricmp(const char *string1, const char *string2);
